@@ -163,7 +163,7 @@ jobs:
         run: |
           BOOT=kernel/out/arch/arm64/boot
           echo "--- boot dir ---"; ls -lh "$BOOT"
-          echo "--- dtb files ---"; find kernel/out/arch/arm64/boot/dts -name '*.dtb*' | head -20
+          echo "--- dtb files ---"; find kernel/out/arch/arm64/boot/dts -name '*.dtb' | head -20 || true
           echo "--- AnyKernel3 dir (from repo) ---"; ls -la "kernel/$AK3_DIR"
           test -f "$BOOT/Image"
           cp "$BOOT/Image" "kernel/$AK3_DIR/Image"
