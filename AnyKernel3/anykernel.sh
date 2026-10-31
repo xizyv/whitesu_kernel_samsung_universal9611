@@ -4,20 +4,13 @@
 ### AnyKernel setup
 # global properties
 properties() { '
-kernel.string=Universal Exynos 9611 AOSP kernel
+kernel.string=WKP for A51 - Unnoficial 
 do.devicecheck=1
 do.modules=0
 do.systemless=1
 do.cleanup=1
 do.cleanuponabort=0
 device.name1=a51
-device.name2=f41
-device.name3=m31s
-device.name4=m31
-device.name5=m21
-device.name6=gta4xl
-device.name7=gta4xlwifi
-device.name8=m21s
 supported.versions=13 - 17
 supported.patchlevels=
 supported.vendorpatchlevels=
