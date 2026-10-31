@@ -42,7 +42,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bc bison flex libssl-dev libelf-dev \
-            zip cpio lz4 git curl device-tree-compiler python3
+            zip cpio lz4 git curl device-tree-compiler python3 python-is-python3
 
       - name: Clone toolchain (clang)
         run: |
@@ -138,6 +138,17 @@ jobs:
             grep -q "^CONFIG_${opt}=y" out/.config \
               || { echo "::error::CONFIG_${opt} did not stick"; exit 1; }
           done
+          
+      - name: Prepare libdss paths
+        working-directory: kernel
+        run: |
+          echo "--- who mentions libdss ---"
+          grep -rn "libdss" --include='Makefile*' --include='Kbuild*' --include='*.mk' . 2>/dev/null | grep -v '^./out/' | head -20 || true
+          mkdir -p out/lib
+          for f in lib/libdss* lib/make_libdss.py; do
+            [ -e "$f" ] && ln -sfn "$PWD/$f" "out/$f"
+          done
+          ls -la out/lib | head
 
       - name: Build kernel
         working-directory: kernel
