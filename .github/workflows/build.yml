@@ -10,7 +10,7 @@ on:
 
 env:
   DEFCONFIG: exynos9611-a51_defconfig
-  LOCALVERSION: "-WKP-AOSP"
+  KSUFFIX: "-WKP-AOSP"
   AK3_DIR: AnyKernel3
   SETUP_URL: https://raw.githubusercontent.com/White-Society/WhiteSU/dev/kernel/setup.sh
   SETUP_ARG: legacy
@@ -122,7 +122,7 @@ jobs:
         working-directory: kernel
         run: |
           make $MAKE_FLAGS "$DEFCONFIG"
-          scripts/config --file out/.config --set-str LOCALVERSION "$LOCALVERSION"
+          scripts/config --file out/.config --set-str LOCALVERSION "$KSUFFIX"
           make $MAKE_FLAGS olddefconfig
 
       - name: Enable KSU options
