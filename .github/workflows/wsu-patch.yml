@@ -1,0 +1,51 @@
+
+name: WhiteSU apply patch
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply-patch:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download patch
+        run: |
+          curl -fL "https://raw.githubusercontent.com/White-Society/kernel-patches/refs/heads/whitesu/syscall_hook/syscall_hooks_4.14.patch" -o changes.patch
+
+      - name: Validate patch
+        run: |
+          git apply --check changes.patch
+
+      - name: Apply patch
+        run: |
+          git apply changes.patch
+
+      - name: Check changes
+        run: |
+          if [[ -z "$(git status --porcelain)" ]]; then
+            echo "No changes detected. Nothing to commit."
+            exit 0
+          fi
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Commit changes
+        run: |
+          git add -A
+          git commit -m "Apply external patch"
+
+      - name: Push changes
+        run: |
+          git push origin HEAD:${GITHUB_REF_NAME}
