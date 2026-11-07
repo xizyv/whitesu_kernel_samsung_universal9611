@@ -1,4 +1,4 @@
-name: Apply Syscall Hooks
+name: Apply KernelSU Syscall Hooks
 
 on:
   workflow_dispatch:
@@ -17,22 +17,21 @@ jobs:
           ref: lineage-24.0
           fetch-depth: 0
 
-      - name: Download original patch
+      - name: Download syscall hooks patch
         run: |
           curl -fL \
             "https://raw.githubusercontent.com/White-Society/kernel-patches/refs/heads/whitesu/syscall_hook/syscall_hooks_4.14.patch" \
             -o syscall_hooks.patch
 
-      - name: Validate remaining patch
+      - name: Check patch
         run: |
-          git apply \
-            --check \
+          git apply --check \
             --whitespace=fix \
             --exclude=drivers/input/input.c \
             --exclude=fs/exec.c \
             syscall_hooks.patch
 
-      - name: Apply remaining patch
+      - name: Apply patch
         run: |
           git apply \
             --whitespace=fix \
@@ -40,22 +39,17 @@ jobs:
             --exclude=fs/exec.c \
             syscall_hooks.patch
 
-      - name: Adapt Samsung input.c
+      - name: Adapt drivers/input/input.c
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           path = Path("drivers/input/input.c")
           data = path.read_text()
 
-          def replace_once(old, new, label):
-              global data
-              count = data.count(old)
-              if count != 1:
-                  raise SystemExit(
-                      f"{label}: expected 1 occurrence, found {count}"
-                  )
-              data = data.replace(old, new, 1)
+          if "ksu_handle_input_handle_event" in data:
+              raise SystemExit("input.c already contains KSU hook")
 
           declaration = """#if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_HOOK)
           extern bool ksu_input_hook __read_mostly;
@@ -64,118 +58,115 @@ jobs:
 
           """
 
-          signature = """void input_event(struct input_dev *dev,
-                   unsigned int type, unsigned int code, int value)
-          {"""
-
-          replace_once(
-              signature,
-              declaration + signature,
-              "input_event declaration"
+          pattern = (
+              r'(?m)^void input_event\(struct input_dev \*dev,\n'
+              r'\s+unsigned int type, unsigned int code, int value\)\n'
+              r'\{\n'
           )
 
-          old = """\tint idx = 0;
-
-          \tif (is_event_supported(type, dev->evbit, EV_MAX)) {"""
-
-          new = """\tint idx = 0;
-
+          replacement = declaration + """void input_event(struct input_dev *dev,
+          		 unsigned int type, unsigned int code, int value)
+          {
           #if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_HOOK)
-          \tif (unlikely(ksu_input_hook))
-          \t\tksu_handle_input_handle_event(&type, &code, &value);
-          #endif
-
-          \tif (is_event_supported(type, dev->evbit, EV_MAX)) {"""
-
-          replace_once(old, new, "input_event hook")
-
-          path.write_text(data)
-          print("Samsung input.c adapted successfully")
-          PY
-
-      - name: Adapt Samsung exec.c
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path("fs/exec.c")
-          data = path.read_text()
-
-          def replace_once(old, new, label):
-              global data
-              count = data.count(old)
-              if count != 1:
-                  raise SystemExit(
-                      f"{label}: expected 1 occurrence, found {count}"
-                  )
-              data = data.replace(old, new, 1)
-
-          declaration = """#if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_HOOK)
-          __attribute__((hot))
-          extern int ksu_handle_execve_sucompat(int *fd, const char __user **filename_user,
-          \t\t\t\t       void *__never_use_argv, void *__never_use_envp,
-          \t\t\t\t       int *__never_use_flags);
+          	if (unlikely(ksu_input_hook))
+          		ksu_handle_input_handle_event(&type, &code, &value);
           #endif
 
           """
 
-          native = """SYSCALL_DEFINE3(execve,
-          \t\tconst char __user *, filename,
-          \t\tconst char __user *const __user *, argv,
-          \t\tconst char __user *const __user *, envp)
-          {"""
+          data, count = re.subn(pattern, replacement, data)
 
-          replace_once(
-              native,
-              declaration + native,
-              "Native execve declaration"
-          )
-
-          native_hook = """SYSCALL_DEFINE3(execve,
-          \t\tconst char __user *, filename,
-          \t\tconst char __user *const __user *, argv,
-          \t\tconst char __user *const __user *, envp)
-          {
-          #if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_HOOK)
-          \tksu_handle_execve_sucompat((int *)AT_FDCWD, &filename, NULL, NULL, NULL);
-          #endif"""
-
-          native_original = """SYSCALL_DEFINE3(execve,
-          \t\tconst char __user *, filename,
-          \t\tconst char __user *const __user *, argv,
-          \t\tconst char __user *const __user *, envp)
-          {"""
-
-          replace_once(
-              native_original,
-              native_hook,
-              "Native execve hook"
-          )
-
-          compat = """COMPAT_SYSCALL_DEFINE3(execve, const char __user *, filename,
-          \tconst compat_uptr_t __user *, argv,
-          \tconst compat_uptr_t __user *, envp)
-          {"""
-
-          compat_hook = """COMPAT_SYSCALL_DEFINE3(execve, const char __user *, filename,
-          \tconst compat_uptr_t __user *, argv,
-          \tconst compat_uptr_t __user *, envp)
-          {
-          #if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_HOOK)
-          \tksu_handle_execve_sucompat((int *)AT_FDCWD, &filename, NULL, NULL, NULL);
-          #endif"""
-
-          replace_once(
-              compat,
-              compat_hook,
-              "Compat execve hook"
-          )
+          if count != 1:
+              raise SystemExit(
+                  f"input_event: expected 1 insertion point, found {count}"
+              )
 
           path.write_text(data)
-          print("Samsung exec.c adapted successfully")
+          print("Successfully integrated input_event hook")
           PY
 
-      - name: Verify syscall hooks
+      - name: Adapt fs/exec.c
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("fs/exec.c")
+          data = path.read_text()
+
+          if "ksu_handle_execve_sucompat" in data:
+              raise SystemExit("exec.c already contains KSU hook")
+
+          declaration = """#if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_HOOK)
+          __attribute__((hot))
+          extern int ksu_handle_execve_sucompat(int *fd, const char __user **filename_user,
+          			       void *__never_use_argv, void *__never_use_envp,
+          			       int *__never_use_flags);
+          #endif
+
+          """
+
+          native_pattern = (
+              r'(?m)^SYSCALL_DEFINE3\(execve,\n'
+              r'\s*const char __user \*, filename,\n'
+              r'\s*const char __user \*const __user \*, argv,\n'
+              r'\s*const char __user \*const __user \*, envp\)\n'
+              r'\{\n'
+          )
+
+          native_replacement = declaration + """SYSCALL_DEFINE3(execve,
+          		const char __user *, filename,
+          		const char __user *const __user *, argv,
+          		const char __user *const __user *, envp)
+          {
+          #if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_HOOK)
+          	ksu_handle_execve_sucompat((int *)AT_FDCWD, &filename, NULL, NULL, NULL);
+          #endif
+          """
+
+          data, count = re.subn(
+              native_pattern,
+              native_replacement,
+              data
+          )
+
+          if count != 1:
+              raise SystemExit(
+                  f"Native execve: expected 1 insertion point, found {count}"
+              )
+
+          compat_pattern = (
+              r'(?m)^COMPAT_SYSCALL_DEFINE3\(execve, const char __user \*, filename,\n'
+              r'\s*const compat_uptr_t __user \*, argv,\n'
+              r'\s*const compat_uptr_t __user \*, envp\)\n'
+              r'\{\n'
+          )
+
+          compat_replacement = """COMPAT_SYSCALL_DEFINE3(execve, const char __user *, filename,
+          	const compat_uptr_t __user *, argv,
+          	const compat_uptr_t __user *, envp)
+          {
+          #if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_HOOK)
+          	ksu_handle_execve_sucompat((int *)AT_FDCWD, &filename, NULL, NULL, NULL);
+          #endif
+          """
+
+          data, count = re.subn(
+              compat_pattern,
+              compat_replacement,
+              data
+          )
+
+          if count != 1:
+              raise SystemExit(
+                  f"Compat execve: expected 1 insertion point, found {count}"
+              )
+
+          path.write_text(data)
+          print("Successfully integrated native and compat execve hooks")
+          PY
+
+      - name: Verify all syscall hooks
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -193,29 +184,35 @@ jobs:
           for filename, symbol in checks.items():
               path = Path(filename)
 
-              if not path.exists():
+              if not path.is_file():
                   raise SystemExit(f"Missing file: {filename}")
 
               content = path.read_text()
 
               if symbol not in content:
                   raise SystemExit(
-                      f"Missing syscall hook: {symbol} in {filename}"
+                      f"Missing hook: {symbol} in {filename}"
                   )
 
-              print(f"OK: {filename} -> {symbol}")
+              print(f"OK: {filename}: {symbol}")
 
-          exec_content = Path("fs/exec.c").read_text()
+          exec_data = Path("fs/exec.c").read_text()
 
-          if exec_content.count("ksu_handle_execve_sucompat") != 3:
+          if exec_data.count("ksu_handle_execve_sucompat") != 3:
               raise SystemExit(
-                  "execve hook declaration/native/compat verification failed"
+                  "execve hook verification failed: "
+                  "expected declaration, native and compat calls"
               )
 
-          print("All syscall hook checks passed!")
+          input_data = Path("drivers/input/input.c").read_text()
+
+          if input_data.count("ksu_handle_input_handle_event") != 2:
+              raise SystemExit("input_event hook verification failed")
+
+          print("All seven syscall hook files verified!")
           PY
 
-      - name: Check whitespace
+      - name: Verify whitespace
         run: |
           git diff --check
 
@@ -225,14 +222,15 @@ jobs:
           git status --short
 
           if [[ -z "$(git status --porcelain)" ]]; then
-            echo "ERROR: No changes were applied!"
+            echo "ERROR: No changes detected!"
             exit 1
           fi
 
       - name: Configure Git
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Commit changes
         run: |
