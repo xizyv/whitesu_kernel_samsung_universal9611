@@ -1,5 +1,4 @@
-
-name: WhiteSU apply patch
+name: Apply Syscall Hooks
 
 on:
   workflow_dispatch:
@@ -15,25 +14,166 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          ref: lineage-24.0
           fetch-depth: 0
 
       - name: Download patch
         run: |
-          curl -fL "https://raw.githubusercontent.com/White-Society/kernel-patches/refs/heads/whitesu/syscall_hook/syscall_hooks_4.14.patch" -o changes.patch
+          curl -fL \
+            "https://raw.githubusercontent.com/White-Society/kernel-patches/refs/heads/whitesu/syscall_hook/syscall_hooks_4.14.patch" \
+            -o syscall_hooks.patch
 
-      - name: Validate patch
+      - name: Apply compatible patch sections
         run: |
-          git apply --check changes.patch
+          python3 - <<'PY'
+          from pathlib import Path
 
-      - name: Apply patch
-        run: |
-          git apply changes.patch
+          patch = Path("syscall_hooks.patch").read_text()
+          sections = patch.split("diff --git ")
+          result = []
 
-      - name: Check changes
+          excluded = (
+              "a/drivers/input/input.c ",
+              "a/fs/exec.c ",
+          )
+
+          for section in sections[1:]:
+              header = section.splitlines()[0]
+
+              if any(header.startswith(item) for item in excluded):
+                  print(f"Skipping manual integration: {header}")
+                  continue
+
+              result.append("diff --git " + section)
+
+          Path("remaining.patch").write_text("".join(result))
+          PY
+
+          git apply --check remaining.patch
+          git apply remaining.patch
+
+      - name: Integrate input.c
         run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("drivers/input/input.c")
+          data = path.read_text()
+
+          signature = """void input_event(struct input_dev *dev,
+          		 unsigned int type, unsigned int code, int value)
+          {
+          	unsigned long flags;
+          """
+
+          replacement = """#if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_HOOK)
+          extern bool ksu_input_hook __read_mostly;
+          extern int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code, int *value);
+          #endif
+
+          """ + signature
+
+          if data.count(signature) != 1:
+              raise SystemExit("input_event signature not found or ambiguous")
+
+          data = data.replace(signature, replacement, 1)
+
+          needle = """	int idx = 0;
+
+          	if (is_event_supported(type, dev->evbit, EV_MAX)) {
+          """
+
+          insert = """	int idx = 0;
+
+          #if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_HOOK)
+          	if (unlikely(ksu_input_hook))
+          		ksu_handle_input_handle_event(&type, &code, &value);
+          #endif
+
+          	if (is_event_supported(type, dev->evbit, EV_MAX)) {
+          """
+
+          if data.count(needle) != 1:
+              raise SystemExit("input_event hook insertion point not found")
+
+          data = data.replace(needle, insert, 1)
+          path.write_text(data)
+
+          print("input.c integrated successfully")
+          PY
+
+      - name: Integrate exec.c
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("fs/exec.c")
+          data = path.read_text()
+
+          declaration = """#if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_HOOK)
+          __attribute__((hot))
+          extern int ksu_handle_execve_sucompat(int *fd, const char __user **filename_user,
+          			       void *__never_use_argv, void *__never_use_envp,
+          			       int *__never_use_flags);
+          #endif
+
+          """
+
+          native = """SYSCALL_DEFINE3(execve,
+          		const char __user *, filename,
+          		const char __user *const __user *, argv,
+          		const char __user *const __user *, envp)
+          {
+          """
+
+          native_replacement = declaration + native + """#if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_HOOK)
+          	ksu_handle_execve_sucompat((int *)AT_FDCWD, &filename, NULL, NULL, NULL);
+          #endif
+          """
+
+          if data.count(native) != 1:
+              raise SystemExit("Native execve insertion point not found")
+
+          data = data.replace(native, native_replacement, 1)
+
+          compat = """COMPAT_SYSCALL_DEFINE3(execve, const char __user *, filename,
+          	const compat_uptr_t __user *, argv,
+          	const compat_uptr_t __user *, envp)
+          {
+          	return compat_do_execve(getname(filename), argv, envp);
+          }
+          """
+
+          compat_replacement = """COMPAT_SYSCALL_DEFINE3(execve, const char __user *, filename,
+          	const compat_uptr_t __user *, argv,
+          	const compat_uptr_t __user *, envp)
+          {
+          #if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_HOOK)
+          	ksu_handle_execve_sucompat((int *)AT_FDCWD, &filename, NULL, NULL, NULL);
+          #endif
+          	return compat_do_execve(getname(filename), argv, envp);
+          }
+          """
+
+          if data.count(compat) != 1:
+              raise SystemExit("Compat execve insertion point not found")
+
+          data = data.replace(compat, compat_replacement, 1)
+
+          path.write_text(data)
+
+          print("exec.c integrated successfully")
+          PY
+
+      - name: Verify changes
+        run: |
+          git diff --check
+
+          git diff --stat
+
           if [[ -z "$(git status --porcelain)" ]]; then
-            echo "No changes detected. Nothing to commit."
-            exit 0
+            echo "ERROR: No changes were applied!"
+            exit 1
           fi
 
       - name: Configure Git
@@ -44,8 +184,8 @@ jobs:
       - name: Commit changes
         run: |
           git add -A
-          git commit -m "Apply external patch"
+          git commit -m "Integrate KernelSU syscall hooks"
 
       - name: Push changes
         run: |
-          git push origin HEAD:${GITHUB_REF_NAME}
+          git push origin HEAD:lineage-24.0
