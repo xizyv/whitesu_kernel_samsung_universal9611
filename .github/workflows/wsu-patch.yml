@@ -19,7 +19,7 @@ jobs:
 
       - name: Download patch
         run: |
-          curl -fL "https://raw.githubusercontent.com/xizyv/whitesu_kernel_samsung_universal9611/refs/heads/A17-dev/.github/patch/273b962f3968e3707031ff6f0d6fb27afff76d78.patch" -o changes.patch
+          curl -fL "https://raw.githubusercontent.com/xizyv/whitesu_kernel_samsung_universal9611/refs/heads/A17-dev/.github/workflows/patch/273b962f3968e3707031ff6f0d6fb27afff76d78.patch" -o changes.patch
 
       - name: Validate patch
         run: |
